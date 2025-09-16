@@ -9,6 +9,8 @@ from attribute_parser import AttributeParser
 import json
 import re
 from datetime import datetime
+import argparse
+from dispatch_data import dispatch_data
 
 
 load_dotenv()
@@ -16,7 +18,7 @@ load_dotenv()
 EMAIL = os.getenv('EMAIL').split(',')
 PASSWORD = os.getenv('PASSWORD').split(',')
 SECRET = os.getenv('SECRET').split(',')
-
+CHUNK_SIZE = 50
 
 
 amz_reviews={
@@ -37,15 +39,19 @@ amz_reviews={
 }
 
 class PlaywrightAmzReviews:
-    def __init__(self):
-        self.urls = [
-                {"id": "dad65664-2284-4b11-8095-e1afa1aaee1e", "retailer_product_id": "B0DW48GN42", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-                {"id": "da16f607-9507-4f89-8891-aa50b23cae5d", "retailer_product_id": "B0B9HTM5GG", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-                {"id": "da5ad27e-815f-435b-9b19-d2743d04b902", "retailer_product_id": "B00UD4I3FC", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-                {"id": "de694b0e-49be-4c78-8695-2dc6359f4079", "retailer_product_id": "B0DPJRB5BG", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-                {"id": "cd05ccfd-1cac-4ae7-bdd0-fb4744cd246c", "retailer_product_id": "B07Q1F8MNH", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-                {"id": "b7e2e7e7-1054-4448-a8bb-aa3e7ef5aea3", "retailer_product_id": "B09QKGY17H", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-            ]
+    def __init__(self, output_file="amz_reviews.json", urls=None):
+        self.output_file_name = output_file
+        if urls:
+            self.urls = urls
+        else:
+            self.urls = [
+                    {"id": "dad65664-2284-4b11-8095-e1afa1aaee1e", "retailer_product_id": "B0DW48GN42", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                    {"id": "da16f607-9507-4f89-8891-aa50b23cae5d", "retailer_product_id": "B0B9HTM5GG", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                    {"id": "da5ad27e-815f-435b-9b19-d2743d04b902", "retailer_product_id": "B00UD4I3FC", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                    {"id": "de694b0e-49be-4c78-8695-2dc6359f4079", "retailer_product_id": "B0DPJRB5BG", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                    {"id": "cd05ccfd-1cac-4ae7-bdd0-fb4744cd246c", "retailer_product_id": "B07Q1F8MNH", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                    {"id": "b7e2e7e7-1054-4448-a8bb-aa3e7ef5aea3", "retailer_product_id": "B09QKGY17H", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                ]
         self.attribute_parser = AttributeParser()
     
     async def click_continue_shopping(self, page):
@@ -165,9 +171,11 @@ class PlaywrightAmzReviews:
                             item[key] = self.attribute_parser.css_value_parser(itemlist=value, response=r)
 
                     reviews_data.append(item)
-                lines = "\n".join(json.dumps(entry, ensure_ascii=False) for entry in reviews_data) + "\n"
-                with open("test.json", "a", encoding="utf-8") as f:
-                    f.write(lines)
+                # lines = "\n".join(json.dumps(entry, ensure_ascii=False) for entry in reviews_data) + "\n"
+                # with open("test.json", "a", encoding="utf-8") as f:
+                #     f.write(lines)
+                if len(reviews_data) >= CHUNK_SIZE:
+                    dispatch_data(reviews_data)
 
                 # Handle pagination
                 next_page_button = page.locator('li.a-last > a')
@@ -291,44 +299,21 @@ class PlaywrightAmzReviews:
                         await self.closer(context, browser)
 
 if __name__ == "__main__":
-    runner = PlaywrightAmzReviews()
+    parser = argparse.ArgumentParser(description="Amazon Reviews Scraper with Playwright")
+    parser.add_argument("--urls", help="urls file path")
+    parser.add_argument("--output", help="File to save the scraped data")
+    args = parser.parse_args()
+    if args.urls:
+        #due to urls is now a json with extra info we need to read it from file beacause of limitation of command line argument
+        with open(args.urls, "r") as f:
+            urls_data = json.load(f)
+        # crawl_args["urls"] = urls_data
+        
+        try:
+            os.remove(args.urls)
+        except Exception as e:
+            print(f"Warning: could not remove {args.urls}: {e}")
+
+        urls = None
+    runner = PlaywrightAmzReviews(output_file=args.output, urls=urls_data)
     asyncio.run(runner.run())
-
-
-# # Fill username & password
-# totp = pyotp.TOTP(SECRET[0])
-# await page.fill("input[name='email']", EMAIL[0])
-# await page.click("input.a-button-input")
-
-# await page.fill("input[name='password']", PASSWORD[0])
-# await page.click("input#signInSubmit")
-# await page.wait_for_timeout(2000)
-
-# await page.fill("#auth-mfa-otpcode[name='otpCode']", totp.now())
-# await page.click("#auth-signin-button[name='mfaSubmit']")
-# await page.wait_for_timeout(2000)
-
-# await page.wait_for_selector("#nav-global-location-popover-link", timeout=5000)
-# await page.click("#nav-global-location-popover-link")
-
-# await page.wait_for_selector("#GLUXZipUpdateInput", timeout=5000)
-# await page.fill("#GLUXZipUpdateInput", "10001")
-
-# if await page.query_selector("Button[name='glowDoneButton']"):
-#     await page.click("Button[name='glowDoneButton']")
-#     await page.wait_for_timeout(3000)
-
-# await page.wait_for_selector("#GLUXZipUpdate", timeout=5000)
-# await page.click("#GLUXZipUpdate")
-# await page.wait_for_timeout(timeout=3000)
-
-# await page.locator("#GLUXConfirmClose").nth(1).click()
-
-# test = await page.query_selector(".a-unordered-list.a-nostyle.a-vertical.review-views.celwidget")
-# if await test:
-#     button = await page.locator("div#reviews-medley-footer>div>a[data-hook='see-all-reviews-link-foot']")
-#     await button.click()
-#     break
-# else:
-#     continue
-    # page.wait_for_timeout(10000)
