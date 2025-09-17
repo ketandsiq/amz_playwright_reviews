@@ -10,15 +10,23 @@ import json
 import re
 from datetime import datetime
 import argparse
+from spider_start_end import task_started, task_completed
 from dispatch_data import dispatch_data
+import signal
+import sys
 
+
+shutdown_flag = False
 
 load_dotenv()
 
 EMAIL = os.getenv('EMAIL').split(',')
 PASSWORD = os.getenv('PASSWORD').split(',')
 SECRET = os.getenv('SECRET').split(',')
-CHUNK_SIZE = 50
+
+
+
+
 
 
 amz_reviews={
@@ -39,18 +47,20 @@ amz_reviews={
 }
 
 class PlaywrightAmzReviews:
-    def __init__(self, output_file="amz_reviews.json", urls=None):
-        self.output_file_name = output_file
+    def __init__(self, output_file, urls=None, tl_id=None):
+        self.output_file_name = output_file if output_file else "/home/ketan.kedar/dsiq-project/dsiq-storageworker/logs/amz_reviews.json"
+        self.reviews_data = []
+        self.tl_id = tl_id
         if urls:
             self.urls = urls
         else:
             self.urls = [
                     {"id": "dad65664-2284-4b11-8095-e1afa1aaee1e", "retailer_product_id": "B0DW48GN42", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-                    {"id": "da16f607-9507-4f89-8891-aa50b23cae5d", "retailer_product_id": "B0B9HTM5GG", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-                    {"id": "da5ad27e-815f-435b-9b19-d2743d04b902", "retailer_product_id": "B00UD4I3FC", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-                    {"id": "de694b0e-49be-4c78-8695-2dc6359f4079", "retailer_product_id": "B0DPJRB5BG", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-                    {"id": "cd05ccfd-1cac-4ae7-bdd0-fb4744cd246c", "retailer_product_id": "B07Q1F8MNH", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
-                    {"id": "b7e2e7e7-1054-4448-a8bb-aa3e7ef5aea3", "retailer_product_id": "B09QKGY17H", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                    # {"id": "da16f607-9507-4f89-8891-aa50b23cae5d", "retailer_product_id": "B0B9HTM5GG", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                    # {"id": "da5ad27e-815f-435b-9b19-d2743d04b902", "retailer_product_id": "B00UD4I3FC", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                    # {"id": "de694b0e-49be-4c78-8695-2dc6359f4079", "retailer_product_id": "B0DPJRB5BG", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                    # {"id": "cd05ccfd-1cac-4ae7-bdd0-fb4744cd246c", "retailer_product_id": "B07Q1F8MNH", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
+                    # {"id": "b7e2e7e7-1054-4448-a8bb-aa3e7ef5aea3", "retailer_product_id": "B09QKGY17H", "retailer_id": "9ad33e7b-1f96-477d-bb95-ee05567a1ec2"},
                 ]
         self.attribute_parser = AttributeParser()
     
@@ -64,8 +74,15 @@ class PlaywrightAmzReviews:
             print("Exception in click shopping method: ",e)
 
     async def closer(self, context, browser):
+        # self.check_last_url(index)
         await context.close()
         await browser.close()
+
+    def handle_signal(self, signum, frame):
+        global shutdown_flag
+        print(f"Received signal {signum}, preparing to shutdown gracefully...")
+        shutdown_flag = True
+        dispatch_data(output_buffer=self.reviews_data, output_file=self.output_file_name, last_chunk=True)
 
     async def sign_in(self, page, id_number=0):
         try:
@@ -80,16 +97,12 @@ class PlaywrightAmzReviews:
             await page.fill("#auth-mfa-otpcode[name='otpCode']", totp.now(), timeout=4000)
             await page.click("#auth-signin-button[name='mfaSubmit']")
             await page.wait_for_timeout(2000)
-            # continue_shopping = await page.query_selector(".a-button-text[alt='Continue shopping']")
-            # if continue_shopping:
-            #     await continue_shopping.click()
             return page
         except Exception as e:
             print("Exception in Sign in: ",e)
             return page
 
     async def parse(self, page, product_id, retailer_id, original_url):
-        # original = response.request.url
         try:
             page_num = 1
             while True:
@@ -102,7 +115,7 @@ class PlaywrightAmzReviews:
                 reviews = selector.css("ul.a-unordered-list.a-nostyle.a-vertical > li[data-hook='review']")
                 if not reviews:
                     break
-                reviews_data = []
+                
                 for r in reviews:
                     item = {}
                     # item['retailerProductId'] = response.meta.get('retailer_product_id')
@@ -170,12 +183,7 @@ class PlaywrightAmzReviews:
                         else:
                             item[key] = self.attribute_parser.css_value_parser(itemlist=value, response=r)
 
-                    reviews_data.append(item)
-                # lines = "\n".join(json.dumps(entry, ensure_ascii=False) for entry in reviews_data) + "\n"
-                # with open("test.json", "a", encoding="utf-8") as f:
-                #     f.write(lines)
-                if len(reviews_data) >= CHUNK_SIZE:
-                    dispatch_data(reviews_data)
+                    self.reviews_data.append(item)
 
                 # Handle pagination
                 next_page_button = page.locator('li.a-last > a')
@@ -184,7 +192,7 @@ class PlaywrightAmzReviews:
                 try:
                     await next_page_button.click()
                     await page.wait_for_timeout(2000)
-                    await page.wait_for_selector('div#cm_cr-review_list>ul.a-unordered-list.a-nostyle.a-vertical', timeout=30000)
+                    await page.wait_for_selector('div#cm_cr-review_list>ul.a-unordered-list.a-nostyle.a-vertical', timeout=5000)
                     page_num += 1
                 except Exception as e:
                     print(e)
@@ -195,19 +203,14 @@ class PlaywrightAmzReviews:
 
     async def detect_honeypot(self, page):
         try:
-            print("INSIDE HONEYPOT")
             await page.wait_for_timeout(2000)
             continue_shopping = await page.query_selector(".a-button-text[alt='Continue shopping']")
             signin = await page.query_selector("input[name='email']")
 
             if continue_shopping or signin:
-                print(continue_shopping)
-                print(signin)
                 print("Honeypot not found")
                 return False
             else: 
-                print(continue_shopping)
-                print(signin)
                 print("Honeypot found Retrying")
                 return True 
             
@@ -216,93 +219,117 @@ class PlaywrightAmzReviews:
             return page
 
     async def run(self):
-        async with Stealth().use_async(async_playwright()) as p:
-            # browser = p.chromium.launch(headless=False, args=["--window-size=1280,800"]) # set to True for headless # context = browser.new_context()
-            
-            id_number = 0
-            for url in self.urls:
-                headers = {
-                    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                    "accept-language": "en-US,en;q=0.9",
-                    "cache-control": "no-cache",
-                    "device-memory": "8",
-                    "downlink": "10",
-                    "dpr": "1",
-                    "ect": "4g",
-                    "pragma": "no-cache",
-                    "priority": "u=0, i",
-                    # "referer": "https://www.amazon.com/b/?ie=UTF8&node=19277531011&ref_=af_gw_quadtopcard_f_july_xcat_cml_1&pd_rd_w=Z5OwE&content-id=amzn1.sym.28c8c8b7-487d-484e-96c7-4d7d067b06ed&pf_rd_p=28c8c8b7-487d-484e-96c7-4d7d067b06ed&pf_rd_r=654GDDXPAIA6G9Z3V3G5&pd_rd_wg=RP51i&pd_rd_r=10053101-20a0-4a52-9465-faf1daa6535e",
-                    "rtt": "50",
-                    "sec-ch-device-memory": "8",
-                    "sec-ch-dpr": "1",
-                    "sec-ch-ua": '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
-                    "sec-ch-ua-mobile": "?0",
-                    "sec-ch-ua-platform": '"Linux"',
-                    "sec-ch-viewport-width": "998",
-                    "sec-fetch-dest": "document",
-                    "sec-fetch-mode": "navigate",
-                    "sec-fetch-site": "same-origin",
-                    "sec-fetch-user": "?1",
-                    "upgrade-insecure-requests": "1",
-                    "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-                    "viewport-width": "998",
-                }
-                full_url = f"https://www.amazon.com/product-reviews/{url['retailer_product_id']}/"
-                # url = f"https://ipv4.webshare.io/"
-                if id_number == len(EMAIL):
-                    id_number = 0
-                for tries in range(10):
-                    try:
-                        browser = await p.chromium.launch(headless=False, args=["--window-size=1280,800"])
-                        context = await browser.new_context(
-                            proxy={
-                                "server": f"{os.getenv('WEBSHARE_SERVER')}",
-                                "username": f"{os.getenv('WEBSHARE_USERNAME')}",
-                                "password": f"{os.getenv('WEBSHARE_PASSWORD')}",
-                            },
-                            extra_http_headers={
-                                "Authorization": f"Token {os.getenv('WEBSHARE_API_KEY')}"
-                            },
-                        )
-                        page = await context.new_page()
+        try:
+            async with Stealth().use_async(async_playwright()) as p:
+                id_number = 0
+                for index, url in enumerate(self.urls):
+                    if shutdown_flag:
+                        print("Shutdown requested. Stopping scrape loop.")
+                        break
+                    headers = {
+                        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                        "accept-language": "en-US,en;q=0.9",
+                        "cache-control": "no-cache",
+                        "device-memory": "8",
+                        "downlink": "10",
+                        "dpr": "1",
+                        "ect": "4g",
+                        "pragma": "no-cache",
+                        "priority": "u=0, i",
+                        # "referer": "https://www.amazon.com/b/?ie=UTF8&node=19277531011&ref_=af_gw_quadtopcard_f_july_xcat_cml_1&pd_rd_w=Z5OwE&content-id=amzn1.sym.28c8c8b7-487d-484e-96c7-4d7d067b06ed&pf_rd_p=28c8c8b7-487d-484e-96c7-4d7d067b06ed&pf_rd_r=654GDDXPAIA6G9Z3V3G5&pd_rd_wg=RP51i&pd_rd_r=10053101-20a0-4a52-9465-faf1daa6535e",
+                        "rtt": "50",
+                        "sec-ch-device-memory": "8",
+                        "sec-ch-dpr": "1",
+                        "sec-ch-ua": '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+                        "sec-ch-ua-mobile": "?0",
+                        "sec-ch-ua-platform": '"Linux"',
+                        "sec-ch-viewport-width": "998",
+                        "sec-fetch-dest": "document",
+                        "sec-fetch-mode": "navigate",
+                        "sec-fetch-site": "same-origin",
+                        "sec-fetch-user": "?1",
+                        "upgrade-insecure-requests": "1",
+                        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+                        "viewport-width": "998",
+                    }
+                    full_url = f"https://www.amazon.com/product-reviews/{url['retailer_product_id']}/"
+                    # url = f"https://ipv4.webshare.io/"
+                    if id_number == len(EMAIL):
+                        id_number = 0
+                    for tries in range(10):
+                        try:
+                            browser = await p.chromium.launch(headless=False, args=["--window-size=1280,800"])
+                            context = await browser.new_context(
+                                proxy={
+                                    "server": f"{os.getenv('WEBSHARE_SERVER')}",
+                                    "username": f"{os.getenv('WEBSHARE_USERNAME')}",
+                                    "password": f"{os.getenv('WEBSHARE_PASSWORD')}",
+                                },
+                                extra_http_headers={
+                                    "Authorization": f"Token {os.getenv('WEBSHARE_API_KEY')}"
+                                },
+                            )
+                            page = await context.new_page()
 
-                        await page.set_extra_http_headers(headers)
-                        await page.goto(full_url, wait_until="domcontentloaded")
-                        await page.wait_for_timeout(2000)
+                            await page.set_extra_http_headers(headers)
+                            await page.goto(full_url, wait_until="domcontentloaded")
+                            await page.wait_for_timeout(2000)
 
-                        res = await self.detect_honeypot(page)
-                        if res:
-                            await self.closer(context, browser)
-                            continue
+                            res = await self.detect_honeypot(page)
+                            if res:
+                                await self.closer(context, browser)
+                                continue
 
-                        await self.click_continue_shopping(page)
+                            await self.click_continue_shopping(page)
 
 
-                        res = await self.detect_honeypot(page)
-                        if res:
+                            res = await self.detect_honeypot(page)
+                            if res:
+                                await self.closer(context, browser)
+                                continue
+                            
+                            await self.sign_in(page, id_number)
+
+                            await self.parse(page, product_id=url['id'], retailer_id=url['retailer_id'], original_url=full_url)
+                            if index == len(self.urls)-1:
+                                dispatch_data(output_buffer=self.reviews_data, output_file=self.output_file_name, last_chunk=True)
+                            else:
+                                dispatch_data(output_buffer=self.reviews_data, output_file=self.output_file_name)
+                            self.reviews_data = []
+                            id_number += 1
+                            break
+
+                        except Exception as e:
+                            print(f" Didn't load page due to: {e}")
+                            print(f" Retrying...")
                             await self.closer(context, browser)
                             continue
                         
-                        await self.sign_in(page, id_number)
+                        finally:
+                            await self.closer(context, browser)
 
-                        await self.parse(page, product_id=url['id'], retailer_id=url['retailer_id'], original_url=full_url)
-                        id_number += 1
-                        break
+        except asyncio.CancelledError:
+            print("Cancelled by SIGINT")
+        except Exception as e:
+            print("Error occured in Run: ", e)
+        finally:
+            # ✅ always runs: normal finish, error, or signal
+            close_reason = "failed" if shutdown_flag else "finished"
+            task_completed(close_reason, self.tl_id)
+            sys.exit(0)
 
-                    except Exception as e:
-                        print(f" Didn't load page due to: {e}")
-                        print(f" Retrying... {tries+1}/10")
-                        await self.closer(context, browser)
-                        continue
-                    
-                    finally:
-                        await self.closer(context, browser)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Amazon Reviews Scraper with Playwright")
     parser.add_argument("--urls", help="urls file path")
     parser.add_argument("--output", help="File to save the scraped data")
     args = parser.parse_args()
+    tl_id = None
+    cel_id = None
+    if args.output:
+        tl_id = args.output.split('/')[-1].split('_')[0] 
+        cel_id = args.output.split('_')[1]
+    urls_data = None
     if args.urls:
         #due to urls is now a json with extra info we need to read it from file beacause of limitation of command line argument
         with open(args.urls, "r") as f:
@@ -314,6 +341,14 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Warning: could not remove {args.urls}: {e}")
 
-        urls = None
-    runner = PlaywrightAmzReviews(output_file=args.output, urls=urls_data)
+    runner = PlaywrightAmzReviews(output_file=args.output, urls=urls_data, tl_id=tl_id)
+    task_started(tl_id, cel_id, args.output)
+
+    signal.signal(signal.SIGTERM, runner.handle_signal)
+    signal.signal(signal.SIGINT, runner.handle_signal)
+
     asyncio.run(runner.run())
+
+    close_reason = "failed" if shutdown_flag else "finished" 
+    task_completed(close_reason, tl_id)
+    

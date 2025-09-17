@@ -1,6 +1,6 @@
 from celery_config import celery
 
-def dispatch_data(self, output_buffer, output_file, last_chunk=False):
+def dispatch_data(output_buffer, output_file, last_chunk=False):
     """Dispatch data to the celery."""
     # if log_type == "signal":
     #     if self.signal_buffer:
@@ -13,6 +13,5 @@ def dispatch_data(self, output_buffer, output_file, last_chunk=False):
     # elif log_type == "output":
     try:
         celery.send_task("log_data", args=[{"data":output_buffer, "file_name":output_file, "last_chunk":last_chunk}], queue="output")
-        self.output_buffer = []  
     except Exception as e:
         print("Exception in dispatch output data: ", e)

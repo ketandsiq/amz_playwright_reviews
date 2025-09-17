@@ -29,7 +29,7 @@ def start_scraper_task(self, task_data):
     output_data = f"{task_data['destination']}/{output_data.split('_')[2]}/{output_data}"
 
     command = [
-        "venv/bin/python","amz_reviews.py", "--urls", url_file_path, "--output", output_data, "--telnet-port", telnet_port 
+        "venv/bin/python",f"{task_data["task_name"]}.py", "--urls", url_file_path, "--output", output_data, 
     ] #Make Sure that the name of virtual environment is "venv"  example: venv/bin/python
 
     if task_data.get("is_playwright"):
@@ -41,12 +41,12 @@ def start_scraper_task(self, task_data):
         subprocess.Popen(
             command,
             shell=False,
-            stdout=subprocess.DEVNULL, #the default behaviour works like it inherits the celery stdout so in terminal we are seeing the print statments of the subprocess ie scrapy
-            stderr=subprocess.DEVNULL,# so we are disable that but in future you can comment these out to debug the problems if any 
+            # stdout=subprocess.DEVNULL, #the default behaviour works like it inherits the celery stdout so in terminal we are seeing the print statments of the subprocess ie scrapy
+            # stderr=subprocess.DEVNULL,# so we are disable that but in future you can comment these out to debug the problems if any 
         )
 
         return {'status': 'success'}
 
     except Exception as e:
-        logging.exception(f"Exception occurred while starting scraper for task_url {url}: {e}")
+        logging.exception(f"Exception occurred while starting scraper for task_url: {e}")
         return {'status': 'error', 'exception': str(e)}
